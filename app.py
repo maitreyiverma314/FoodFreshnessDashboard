@@ -1,12 +1,10 @@
-import os
-from datetime import datetime
-
 import streamlit as st
 import tensorflow as tf
 import numpy as np
 import pandas as pd
 import cv2
 
+from datetime import datetime
 from PIL import Image
 import matplotlib.cm as cm
 
@@ -29,14 +27,18 @@ st.set_page_config(
 
 MODEL_PATH = "best_mobilenetv2.keras"
 
-HISTORY_FILE = "prediction_history.csv"
-
 IMAGE_SIZE = (224, 224)
 
 
 # ============================================================
 # SESSION STATE
 # ============================================================
+
+# IMPORTANT:
+# All prediction history is stored only in the current
+# Streamlit user's session.
+#
+# It is NOT stored in a shared CSV/database.
 
 if "prediction_history" not in st.session_state:
 
@@ -58,82 +60,9 @@ if "camera_names" not in st.session_state:
     st.session_state.camera_names = []
 
 
-# ============================================================
-# LOAD PREDICTION HISTORY
-# ============================================================
+if "active_camera_batch" not in st.session_state:
 
-def load_prediction_history():
-
-    if not os.path.exists(
-        HISTORY_FILE
-    ):
-
-        return []
-
-
-    try:
-
-        df = pd.read_csv(
-            HISTORY_FILE
-        )
-
-
-        if df.empty:
-
-            return []
-
-
-        return df.to_dict(
-            orient="records"
-        )
-
-
-    except Exception:
-
-        return []
-
-
-if not st.session_state.prediction_history:
-
-    st.session_state.prediction_history = (
-        load_prediction_history()
-    )
-
-
-# ============================================================
-# SAVE PREDICTION HISTORY
-# ============================================================
-
-def save_prediction_history():
-
-    history = (
-        st.session_state.prediction_history
-    )
-
-
-    if not history:
-
-        return
-
-
-    try:
-
-        df = pd.DataFrame(
-            history
-        )
-
-
-        df.to_csv(
-            HISTORY_FILE,
-            index=False
-        )
-
-
-    except Exception as e:
-
-        st.warning(
-            f"Could not save prediction history: {e}"
-        )
+    st.session_state.active_camera_batch = False
 
 
 # ============================================================
@@ -152,18 +81,15 @@ try:
 
     model = load_model()
 
-
 except Exception as e:
 
     st.error(
         "❌ Unable to load the trained MobileNetV2 model."
     )
 
-
     st.write(
         f"Expected model location: `{MODEL_PATH}`"
     )
-
 
     st.exception(e)
 
@@ -238,7 +164,6 @@ def predict_freshness(image):
 
         confidence = rotten_percentage
 
-
     else:
 
         label = "Fresh"
@@ -257,6 +182,7 @@ def predict_freshness(image):
 
         "rotten_probability":
             rotten_percentage
+
     }
 
 
@@ -378,7 +304,6 @@ def predict_multiple_images(images):
             confidence = (
                 rotten_percentage
             )
-
 
         else:
 
@@ -1299,10 +1224,6 @@ else:
 
     if camera_file is not None:
 
-        # ----------------------------------------------------
-        # ADD CURRENT CAMERA PHOTO
-        # ----------------------------------------------------
-
         if st.button(
             "➕ Add Photo to Batch",
             type="primary"
@@ -1316,8 +1237,6 @@ else:
                     "RGB"
                 )
 
-
-                # Create unique name
 
                 photo_number = (
                     len(
@@ -1381,7 +1300,7 @@ else:
 
 
         # ----------------------------------------------------
-        # CAMERA BATCH PREVIEW
+        # PREVIEW
         # ----------------------------------------------------
 
         preview_count = min(
@@ -1433,7 +1352,7 @@ else:
 
 
         # ----------------------------------------------------
-        # CAMERA BATCH CONTROLS
+        # CAMERA CONTROLS
         # ----------------------------------------------------
 
         control1, control2 = st.columns(2)
@@ -1464,25 +1383,14 @@ else:
 
             st.session_state.last_batch_id = None
 
+            st.session_state.active_camera_batch = False
+
             st.rerun()
 
-
-        # ----------------------------------------------------
-        # SET CAMERA BATCH FOR PROCESSING
-        # ----------------------------------------------------
 
         if analyze_camera:
 
             st.session_state.active_camera_batch = True
-
-        else:
-
-            if (
-                "active_camera_batch"
-                not in st.session_state
-            ):
-
-                st.session_state.active_camera_batch = False
 
 
 # ============================================================
@@ -1537,12 +1445,7 @@ if input_method == "Upload Multiple Images":
 
 else:
 
-    if (
-        "active_camera_batch"
-        in st.session_state
-        and
-        st.session_state.active_camera_batch
-    ):
+    if st.session_state.active_camera_batch:
 
         active_images = (
             st.session_state.camera_batch
@@ -1773,7 +1676,7 @@ if active_images:
 
 
     # ========================================================
-    # DISTRIBUTION CHART
+    # DISTRIBUTION
     # ========================================================
 
     st.subheader(
@@ -1805,7 +1708,7 @@ if active_images:
 
 
     # ========================================================
-    # DOWNLOAD RESULTS
+    # DOWNLOAD BATCH RESULTS
     # ========================================================
 
     st.subheader(
@@ -2278,7 +2181,7 @@ if active_images:
 
 
     # ========================================================
-    # SAVE BATCH TO HISTORY
+    # SAVE BATCH TO CURRENT USER SESSION
     # ========================================================
 
     batch_id = (
@@ -2332,12 +2235,13 @@ if active_images:
             }
 
 
+            # IMPORTANT:
+            # This is stored only in the current user's
+            # Streamlit session.
+
             st.session_state.prediction_history.append(
                 record
             )
-
-
-        save_prediction_history()
 
 
         st.session_state.last_batch_id = (
@@ -2409,9 +2313,13 @@ st.divider()
 
 
 st.header(
-    "📊 Prediction Analytics"
+    "📊 My Prediction Analytics"
 )
 
+
+# IMPORTANT:
+# This history belongs ONLY to the current user's
+# Streamlit session.
 
 history = (
     st.session_state.prediction_history
@@ -2422,7 +2330,8 @@ if len(history) == 0:
 
     st.info(
         """
-        No predictions have been recorded yet.
+        No predictions have been recorded in your
+        current session yet.
 
         Upload images or capture camera photos
         to begin.
@@ -2471,7 +2380,7 @@ else:
     with a1:
 
         st.metric(
-            "Images Analyzed",
+            "My Images Analyzed",
             total_predictions
         )
 
@@ -2479,7 +2388,7 @@ else:
     with a2:
 
         st.metric(
-            "🟢 Fresh",
+            "🟢 My Fresh",
             fresh_count
         )
 
@@ -2487,7 +2396,7 @@ else:
     with a3:
 
         st.metric(
-            "🔴 Rotten",
+            "🔴 My Rotten",
             rotten_count
         )
 
@@ -2495,7 +2404,7 @@ else:
     with a4:
 
         st.metric(
-            "Average Confidence",
+            "My Avg. Confidence",
             f"{average_confidence:.2f}%"
         )
 
@@ -2505,7 +2414,7 @@ else:
     # ========================================================
 
     st.subheader(
-        "📊 Fresh vs Rotten Distribution"
+        "📊 My Fresh vs Rotten Distribution"
     )
 
 
@@ -2539,7 +2448,7 @@ else:
     if total_predictions > 1:
 
         st.subheader(
-            "📈 Confidence Trend"
+            "📈 My Confidence Trend"
         )
 
 
@@ -2568,11 +2477,11 @@ else:
 
 
     # ========================================================
-    # HISTORY
+    # CURRENT USER HISTORY
     # ========================================================
 
     st.subheader(
-        "📜 Prediction History"
+        "📜 My Prediction History"
     )
 
 
@@ -2584,7 +2493,7 @@ else:
 
 
     # ========================================================
-    # DOWNLOAD HISTORY
+    # DOWNLOAD CURRENT USER HISTORY
     # ========================================================
 
     csv_data = (
@@ -2597,12 +2506,12 @@ else:
 
     st.download_button(
 
-        label="📥 Download Complete Prediction History",
+        label="📥 Download My Prediction History",
 
         data=csv_data,
 
         file_name=(
-            "food_freshness_prediction_history.csv"
+            "my_food_freshness_history.csv"
         ),
 
         mime="text/csv"
@@ -2610,32 +2519,16 @@ else:
 
 
     # ========================================================
-    # CLEAR HISTORY
+    # CLEAR CURRENT USER HISTORY
     # ========================================================
 
     if st.button(
-        "🗑️ Clear Prediction History"
+        "🗑️ Clear My Prediction History"
     ):
 
         st.session_state.prediction_history = []
 
         st.session_state.last_batch_id = None
-
-
-        if os.path.exists(
-            HISTORY_FILE
-        ):
-
-            try:
-
-                os.remove(
-                    HISTORY_FILE
-                )
-
-            except Exception:
-
-                pass
-
 
         st.rerun()
 
@@ -3057,8 +2950,8 @@ with tab3:
         13. The user can select one image for detailed
             analysis and Grad-CAM visualization.
 
-        14. Batch predictions are stored in the
-            prediction history.
+        14. Predictions are stored only in the current
+            user's Streamlit session.
 
         15. Results can be exported as a CSV file.
         """
@@ -3086,8 +2979,8 @@ with tab4:
 
         ### Cloud Deployment
 
-        The application can be deployed to a cloud
-        platform for remote access.
+        The application is already deployed through
+        Streamlit Community Cloud for remote access.
 
         ### Mobile Application
 
