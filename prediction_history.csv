@@ -1,0 +1,36 @@
+Timestamp,Input,Prediction,Confidence (%),Fresh Probability (%),Rotten Probability (%),Reliability,Image Width,Image Height,Brightness,Sharpness
+2026-08-25 03:35:53,images.jpg,Rotten,99.75,0.25,99.75,Very High,530.0,377.0,160.65,1260.22
+2026-08-25 03:36:13,images (1).jpg,Rotten,100.0,0.0,100.0,Very High,443.0,451.0,228.74,90.48
+2026-08-25 03:39:19,organic-fresh-apple-fruit-1-kg-2226818126-zslia1l5.jpg,Fresh,100.0,100.0,0.0,Very High,1500.0,1749.0,153.75,9.82
+2026-08-25 03:40:17,apple-500x500.jpg,Fresh,99.66,99.66,0.34,Very High,500.0,377.0,170.94,285.47
+2026-08-25 03:42:58,camera-input-2026-08-24T22_12_55.712Z.jpg,Fresh,100.0,100.0,0.0,Very High,1066.0,599.0,114.11,88.87
+2026-08-25 03:44:58,rotten-tomatoes-on-the-white-background-EB51PP.jpg,Rotten,99.47,0.53,99.47,Very High,1300.0,965.0,157.75,581.44
+2026-08-25 03:46:04,istockphoto-1358210713-612x612.jpg,Rotten,100.0,0.0,100.0,Very High,612.0,448.0,232.8,98.64
+2026-08-25 03:47:05,cucumber-mold-rotten-isolated-on-260nw-1635379816.jpg,Rotten,99.62,0.38,99.62,Very High,393.0,280.0,225.53,961.6
+2026-08-25 03:47:51,rotten-orange-isolated-on-white-TCKXEM.jpg,Rotten,99.99,0.01,99.99,Very High,1300.0,1305.0,181.71,538.14
+2026-08-25 03:48:36,images.jpg,Fresh,99.05,99.05,0.95,Very High,452.0,678.0,167.52,361.66
+2026-08-25 03:49:21,Strawberry-Shortcakes-2432-scaled.jpg,Fresh,97.82,97.82,2.18,Very High,2048.0,1365.0,99.51,83.97
+2026-08-25 04:01:15,cucumber-mold-rotten-isolated-on-260nw-1635379816.jpg,Rotten,99.62,0.38,99.62,Very High,,,,
+2026-08-25 04:01:15,images.jpg,Fresh,99.05,99.05,0.95,Very High,,,,
+2026-08-25 04:01:15,istockphoto-1358210713-612x612.jpg,Rotten,100.0,0.0,100.0,Very High,,,,
+2026-08-25 04:01:15,rotten-orange-isolated-on-white-TCKXEM.jpg,Rotten,99.99,0.01,99.99,Very High,,,,
+2026-08-25 04:01:15,rotten-tomatoes-on-the-white-background-EB51PP.jpg,Rotten,99.47,0.53,99.47,Very High,,,,
+2026-08-25 04:01:15,Strawberry-Shortcakes-2432-scaled.jpg,Fresh,97.82,97.82,2.18,Very High,,,,
+2026-08-25 04:09:26,Camera_Photo_1.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:09:26,Camera_Photo_2.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:09:26,Camera_Photo_3.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:11:12,Camera_Photo_1.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:11:12,Camera_Photo_2.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:11:12,Camera_Photo_3.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:11:12,Camera_Photo_4.jpg,Fresh,79.57,79.57,20.43,High,,,,
+2026-08-25 04:12:10,Camera_Photo_1.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:12:10,Camera_Photo_2.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:12:10,Camera_Photo_3.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:12:10,Camera_Photo_4.jpg,Fresh,79.57,79.57,20.43,High,,,,
+2026-08-25 04:12:10,Camera_Photo_5.jpg,Rotten,93.7,6.3,93.7,Very High,,,,
+2026-08-25 04:13:30,Camera_Photo_1.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:13:30,Camera_Photo_2.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:13:30,Camera_Photo_3.jpg,Fresh,52.59,52.59,47.41,Low,,,,
+2026-08-25 04:13:30,Camera_Photo_4.jpg,Fresh,79.57,79.57,20.43,High,,,,
+2026-08-25 04:13:30,Camera_Photo_5.jpg,Rotten,93.7,6.3,93.7,Very High,,,,
+2026-08-25 04:13:30,Camera_Photo_6.jpg,Fresh,86.88,86.88,13.12,High,,,,
