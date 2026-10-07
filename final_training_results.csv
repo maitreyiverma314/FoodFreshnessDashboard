@@ -1,0 +1,5 @@
+Model,Optimizer,Best Val Accuracy,Best Val Loss,Best Epoch,Training Time (sec),Parameters,Model Size (MB),Model Path,History Path
+MobileNetV2,adam,0.972191333770752,0.08499937504529953,10,1277.1166095733643,2422081,11.052495956420898,/kaggle/working/final_models/best_MobileNetV2.keras,/kaggle/working/histories/MobileNetV2_history.csv
+EfficientNetB0,rmsprop,0.9749721884727478,0.07083918899297714,10,1255.6261446475983,4213668,17.504974365234375,/kaggle/working/final_models/best_EfficientNetB0.keras,/kaggle/working/histories/EfficientNetB0_history.csv
+ResNet50,rmsprop,0.9794215559959412,0.06417462974786758,10,1238.5990943908691,23850113,92.60883522033691,/kaggle/working/final_models/best_ResNet50.keras,/kaggle/working/histories/ResNet50_history.csv
+DenseNet121,rmsprop,0.9677419066429138,0.08382679522037506,10,1301.9117004871368,7168833,29.292743682861328,/kaggle/working/final_models/best_DenseNet121.keras,/kaggle/working/histories/DenseNet121_history.csv
