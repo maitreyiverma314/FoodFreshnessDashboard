@@ -37,76 +37,52 @@ BASE_DIR = os.path.dirname(
 
 
 # ============================================================
-# MODEL CONFIGURATION
-# ============================================================
+# MODEL CONFIGURATION — FOOD FRESHNESS DETECTION SYSTEM V2.0
+# ------------------------------------------------------------------
+# Place both downloaded .keras files either beside app.py or inside
+# a folder named "models". Environment-variable overrides are also
+# supported (see README.txt).
 
-MODEL_NAME = "ResNet50"
-
-MODEL_FILENAME = "best_ResNet50.keras"
-
-MODEL_PATH = os.path.join(
-    BASE_DIR,
-    MODEL_FILENAME
-)
-
-OPTIMIZER_NAME = "RMSprop"
-
-PRETRAINED_WEIGHTS = "ImageNet"
-
-LEARNING_STRATEGY = "Transfer Learning"
+MODEL_NAME = "MobileNetV2 + ResNet50"
+VALIDATOR_MODEL_FILENAME = "mobilenetv2_validator.keras"
+FRESHNESS_MODEL_FILENAME = "resnet50_freshness.keras"
 
 IMG_SIZE = (224, 224)
+VALIDATOR_THRESHOLD = 0.85
+FRESHNESS_THRESHOLD = 0.50
 
-THRESHOLD = 0.5
+PRETRAINED_WEIGHTS = "ImageNet"
+LEARNING_STRATEGY = "Transfer Learning"
 
-TRAINING_IMAGES = 8389
+# Validator dataset: expanded training and validation data.
+VALIDATOR_TRAINING_IMAGES = 20866
+VALIDATOR_VALIDATION_IMAGES = 5956
+VALIDATOR_TEST_IMAGES = 5373
+# Held-out supported-produce freshness test split.
+FRESHNESS_TEST_IMAGES = 1757
+FOOD101_EXTERNAL_TEST_IMAGES = 2500
 
-VALIDATION_IMAGES = 1798
+# Final V2.0 improved-validator evaluation.
+# Acceptance metrics use the probability threshold below; the 3-class
+# confusion matrix records argmax predictions before the acceptance gate.
+VALIDATOR_PRODUCE_RECALL = 0.9670
+VALIDATOR_FALSE_ACCEPT_RATE = 0.0003
+VALIDATOR_ACCEPTED_PRECISION = 0.9994
+FOOD101_EXTERNAL_REJECTION_RATE = 0.9996
+VALIDATOR_3CLASS_ACCURACY = 5310 / 5373
 
-TEST_IMAGES = 1799
-
-DENSE_UNITS = 128
-
-DROPOUT = 0.3
-
-LEARNING_RATE = 0.0003
-
-
-# ============================================================
-# RESNET50 TEST CONFUSION MATRIX
-# ============================================================
-
-#                 Predicted
-#                 Fresh   Rotten
-#
-# Actual Fresh      902      15
-#        Rotten      23     859
-
-RESNET_CONFUSION_MATRIX = np.array(
+# Rows = actual; columns = predicted (argmax, before confidence gate).
+# Labels: Supported Produce, Other Food, Non-Food.
+VALIDATOR_CONFUSION_MATRIX = np.array(
     [
-        [902, 15],
-        [23, 859]
+        [1728, 16, 13],
+        [7, 3094, 15],
+        [4, 8, 488]
     ],
     dtype=int
 )
 
 
-# ============================================================
-# RESULT FILES
-# ============================================================
-
-COMPARISON_PATH = os.path.join(
-    BASE_DIR,
-    "final_comparison_percentage.csv"
-)
-
-TRAINING_RESULTS_PATH = os.path.join(
-    BASE_DIR,
-    "final_training_results.csv"
-)
-
-
-# ============================================================
 # SUPABASE
 # ============================================================
 
@@ -292,6 +268,11 @@ st.markdown(
         border-left: 6px solid #e33d4d;
     }
 
+    .result-rejected {
+        border-left: 6px solid #98a2b3;
+        background-color: #f7f8fa;
+    }
+
     .result-title {
         font-size: 1.3rem;
         font-weight: 750;
@@ -403,79 +384,43 @@ def load_cloud_history():
         return []
 
 
-def save_batch_to_cloud(
-    results
-):
-
+def save_batch_to_cloud(results):
+    """Save V2 predictions using the existing Supabase table schema."""
     if supabase is None:
-
         return False
 
     if not results:
-
         return True
 
     records = []
-
     for result in results:
-
         records.append(
             {
-                "image_name":
-                    result["name"],
-
-                "prediction":
-                    result["label"],
-
-                "confidence":
-                    float(
-                        result["confidence"]
-                    ),
-
-                "fresh_probability":
-                    float(
-                        result["fresh_probability"]
-                    ),
-
-                "rotten_probability":
-                    float(
-                        result["rotten_probability"]
-                    ),
-
-                "image_quality":
-                    result["quality"],
-
-                "inference_ms":
-                    float(
-                        result["inference_ms"]
-                    ),
-
-                "model_name":
-                    "ResNet50"
+                "image_name": result["name"],
+                "prediction": result["label"],
+                "confidence": float(result["confidence"]),
+                # These are NULL for rejected images because ResNet50
+                # is not called unless the validator accepts the image.
+                "fresh_probability": result.get("fresh_probability"),
+                "rotten_probability": result.get("rotten_probability"),
+                "image_quality": result["quality"],
+                "inference_ms": float(result["inference_ms"]),
+                "model_name": "MobileNetV2 + ResNet50 V2.0"
             }
         )
 
     try:
-
-        (
-            supabase
-            .table(HISTORY_TABLE)
-            .insert(records)
-            .execute()
-        )
-
+        supabase.table(HISTORY_TABLE).insert(records).execute()
         return True
-
     except Exception as error:
-
         st.warning(
-            f"Could not save detections: {error}"
+            "Could not save detections to Supabase. Make sure the "
+            "fresh_probability and rotten_probability columns allow NULL "
+            f"for rejected images. Details: {error}"
         )
-
         return False
 
 
-# ============================================================
 # SESSION STATE
 # ============================================================
 
@@ -507,78 +452,91 @@ if "last_camera_hash" not in st.session_state:
 
 
 # ============================================================
-# LOAD RESNET50
+# LOAD BOTH V2 MODELS
 # ============================================================
 
-@st.cache_resource
-def load_resnet50():
+def resolve_model_path(filename, environment_variable):
+    """Find a model beside app.py or in ./models, with env override."""
+    override = os.getenv(environment_variable)
+    candidates = []
 
-    if not os.path.exists(
-        MODEL_PATH
-    ):
+    if override:
+        candidates.append(os.path.abspath(os.path.expanduser(override)))
 
-        raise FileNotFoundError(
-            f"""
-ResNet50 model file not found.
-
-Expected:
-{MODEL_PATH}
-
-Make sure the file:
-
-best_ResNet50.keras
-
-is in the same folder as app.py.
-"""
-        )
-
-    loaded_model = (
-        tf.keras.models.load_model(
-            MODEL_PATH
-        )
+    candidates.extend(
+        [
+            os.path.join(BASE_DIR, filename),
+            os.path.join(BASE_DIR, "models", filename),
+        ]
     )
 
-    return loaded_model
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
+    searched = "\n".join(f"- {path}" for path in candidates)
+    raise FileNotFoundError(
+        f"Model file '{filename}' was not found. Checked:\n{searched}\n\n"
+        "Download the model from your Kaggle output and place it beside "
+        "app.py or inside the models folder."
+    )
+
+
+@st.cache_resource(show_spinner="Loading V2.0 AI models...")
+def load_keras_model(path):
+    # compile=False avoids loading training-only optimizer/loss state.
+    return tf.keras.models.load_model(path, compile=False)
 
 
 try:
-
-    model = load_resnet50()
-
-except Exception as error:
-
-    st.error(
-        f"Unable to load ResNet50 model:\n\n{error}"
+    VALIDATOR_MODEL_PATH = resolve_model_path(
+        VALIDATOR_MODEL_FILENAME,
+        "FOOD_VALIDATOR_MODEL_PATH"
+    )
+    FRESHNESS_MODEL_PATH = resolve_model_path(
+        FRESHNESS_MODEL_FILENAME,
+        "FOOD_FRESHNESS_MODEL_PATH"
     )
 
+    validator_model = load_keras_model(VALIDATOR_MODEL_PATH)
+    freshness_model = load_keras_model(FRESHNESS_MODEL_PATH)
+
+    # Existing Grad-CAM functions use the name `model`.
+    model = freshness_model
+
+    if int(validator_model.output_shape[-1]) != 3:
+        raise ValueError(
+            "The MobileNetV2 validator must output 3 class probabilities."
+        )
+
+    if int(np.prod(freshness_model.output_shape[1:])) != 1:
+        raise ValueError(
+            "The ResNet50 freshness model must output one sigmoid probability."
+        )
+
+except Exception as error:
+    st.error(f"Unable to load the V2.0 models:\n\n{error}")
     st.stop()
 
 
-# ============================================================
 # MODEL INFORMATION
 # ============================================================
 
 print("=" * 70)
-print("AI FOOD FRESHNESS DETECTION")
-print("=" * 70)
-print("Model       :", MODEL_NAME)
-print("Optimizer   :", OPTIMIZER_NAME)
-print("Model file  :", MODEL_PATH)
+print("FOOD FRESHNESS DETECTION SYSTEM V2.0 — GRAD-CAM FIX")
+print("Validator   : MobileNetV2")
+print("Freshness   : ResNet50")
+print("Validator threshold:", VALIDATOR_THRESHOLD)
+print("Freshness threshold:", FRESHNESS_THRESHOLD)
+print("Validator file:", VALIDATOR_MODEL_PATH)
+print("Freshness file:", FRESHNESS_MODEL_PATH)
 print("Input size  :", IMG_SIZE)
-print(
-    "Parameters  :",
-    f"{model.count_params():,}"
-)
-print(
-    "Supabase    :",
-    "Connected"
-    if supabase is not None
-    else "Not connected"
-)
+print("Validator parameters:", f"{validator_model.count_params():,}")
+print("Freshness parameters:", f"{freshness_model.count_params():,}")
+print("Supabase    :", "Connected" if supabase is not None else "Not connected")
 print("=" * 70)
 
 
-# ============================================================
 # MODEL PREPROCESSING
 # ============================================================
 
@@ -616,283 +574,36 @@ def preprocess_resnet50(
 
 
 # ============================================================
-# LOAD CSV FILES
+# V2.0 METRIC FORMATTING
 # ============================================================
 
-@st.cache_data
-def load_csv(
-    path
-):
-
-    if not os.path.exists(path):
-
-        return None
-
-    try:
-
-        return pd.read_csv(
-            path
-        )
-
-    except Exception:
-
-        return None
-
-
-comparison_df = load_csv(
-    COMPARISON_PATH
-)
-
-training_df = load_csv(
-    TRAINING_RESULTS_PATH
-)
-
-
-# ============================================================
-# FIND MODEL ROW
-# ============================================================
-
-def get_model_row(
-    dataframe,
-    model_name
-):
-
-    if dataframe is None:
-        return None
-
-    if "Model" not in dataframe.columns:
-        return None
-
-    rows = dataframe[
-        dataframe["Model"]
-        .astype(str)
-        .str.lower()
-        == model_name.lower()
-    ]
-
-    if rows.empty:
-        return None
-
-    return rows.iloc[0]
-
-
-comparison_row = get_model_row(
-    comparison_df,
-    "ResNet50"
-)
-
-training_row = get_model_row(
-    training_df,
-    "ResNet50"
-)
-
-
-# ============================================================
-# METRIC FUNCTIONS
-# ============================================================
-
-def get_metric(
-    row,
-    names
-):
-
-    if row is None:
-        return None
-
-    for name in names:
-
-        if name in row.index:
-
-            value = row[name]
-
-            if pd.isna(value):
-                continue
-
-            try:
-
-                return float(value)
-
-            except Exception:
-
-                continue
-
-    return None
-
-
-def normalize_percentage(
-    value
-):
-
+def format_percentage(value):
     if value is None:
-        return None
-
-    try:
-
-        value = float(value)
-
-        if value <= 1:
-
-            return value * 100
-
-        return value
-
-    except Exception:
-
-        return None
-
-
-def format_percentage(
-    value
-):
-
-    value = normalize_percentage(
-        value
-    )
-
-    if value is None:
-
         return "—"
-
-    return f"{value:.2f}%"
-
-
-# ============================================================
-# MODEL METRICS
-# ============================================================
-
-TEST_ACCURACY = get_metric(
-    comparison_row,
-    [
-        "Accuracy",
-        "Test Accuracy"
-    ]
-)
+    return f"{float(value) * 100:.2f}%"
 
 
-PRECISION = get_metric(
-    comparison_row,
-    [
-        "Precision"
-    ]
-)
 
-
-RECALL = get_metric(
-    comparison_row,
-    [
-        "Recall"
-    ]
-)
-
-
-F1_SCORE = get_metric(
-    comparison_row,
-    [
-        "F1-Score",
-        "F1 Score"
-    ]
-)
-
-
-BEST_VALIDATION_ACCURACY = get_metric(
-    training_row,
-    [
-        "Best Val Accuracy",
-        "Best Validation Accuracy",
-        "Val Accuracy"
-    ]
-)
-
-
-# ============================================================
-# FALLBACK METRICS
-# ============================================================
-
-if TEST_ACCURACY is None:
-
-    correct = (
-        RESNET_CONFUSION_MATRIX[0, 0]
-        + RESNET_CONFUSION_MATRIX[1, 1]
-    )
-
-    total = int(
-        RESNET_CONFUSION_MATRIX.sum()
-    )
-
-    TEST_ACCURACY = (
-        correct / total
-    )
-
-
-if PRECISION is None:
-
-    tp = RESNET_CONFUSION_MATRIX[1, 1]
-
-    fp = RESNET_CONFUSION_MATRIX[0, 1]
-
-    PRECISION = (
-        tp / (tp + fp)
-        if tp + fp > 0
-        else 0
-    )
-
-
-if RECALL is None:
-
-    tp = RESNET_CONFUSION_MATRIX[1, 1]
-
-    fn = RESNET_CONFUSION_MATRIX[1, 0]
-
-    RECALL = (
-        tp / (tp + fn)
-        if tp + fn > 0
-        else 0
-    )
-
-
-if F1_SCORE is None:
-
-    p = float(
-        PRECISION
-    )
-
-    r = float(
-        RECALL
-    )
-
-    if p + r > 0:
-
-        F1_SCORE = (
-            2 * p * r
-            / (p + r)
-        )
-
-    else:
-
-        F1_SCORE = 0
-
-
-# ============================================================
 # MODEL SIZE
 # ============================================================
 
-try:
-
-    MODEL_SIZE_MB = (
-        os.path.getsize(
-            MODEL_PATH
-        )
-        / (
-            1024 * 1024
-        )
-    )
-
-except Exception:
-
-    MODEL_SIZE_MB = None
+def get_file_size_mb(path):
+    try:
+        return os.path.getsize(path) / (1024 * 1024)
+    except OSError:
+        return None
 
 
-# ============================================================
+VALIDATOR_MODEL_SIZE_MB = get_file_size_mb(VALIDATOR_MODEL_PATH)
+FRESHNESS_MODEL_SIZE_MB = get_file_size_mb(FRESHNESS_MODEL_PATH)
+MODEL_SIZE_MB = (
+    VALIDATOR_MODEL_SIZE_MB + FRESHNESS_MODEL_SIZE_MB
+    if VALIDATOR_MODEL_SIZE_MB is not None
+    and FRESHNESS_MODEL_SIZE_MB is not None
+    else None
+)
+
+
 # IMAGE QUALITY
 # ============================================================
 
@@ -981,542 +692,412 @@ def assess_image_quality(
 
 
 # ============================================================
-# PREDICTION
+# TWO-STAGE V2.0 PREDICTION PIPELINE
 # ============================================================
 
-def predict_images(
-    image_records
-):
-
-    processed = []
-
-
-    for record in image_records:
-
-        image = record[
-            "image"
-        ].convert("RGB")
+VALIDATOR_CLASS_NAMES = {
+    0: "Supported Produce",
+    1: "Other Food",
+    2: "Non-Food"
+}
 
 
-        resized = image.resize(
-            IMG_SIZE,
-            Image.Resampling.BILINEAR
-        )
+def preprocess_validator_image(image):
+    image = image.convert("RGB").resize(
+        IMG_SIZE,
+        Image.Resampling.BILINEAR
+    )
+    array = np.asarray(image, dtype=np.float32)
+    return tf.keras.applications.mobilenet_v2.preprocess_input(array)
 
 
-        array = np.asarray(
-            resized,
-            dtype=np.float32
-        )
+def preprocess_freshness_image(image):
+    image = image.convert("RGB").resize(
+        IMG_SIZE,
+        Image.Resampling.BILINEAR
+    )
+    array = np.asarray(image, dtype=np.float32)
+    return tf.keras.applications.resnet50.preprocess_input(array)
 
 
-        array = (
-            tf.keras
-            .applications
-            .resnet50
-            .preprocess_input(
-                array
-            )
-        )
+def predict_images(image_records):
+    """Validate each image first, then classify accepted produce freshness."""
+    if not image_records:
+        return []
 
+    start_time = time.perf_counter()
 
-        processed.append(
-            array
-        )
-
-
-    batch = np.stack(
-        processed,
+    # Stage 1: MobileNetV2 image validation.
+    validator_batch = np.stack(
+        [preprocess_validator_image(record["image"]) for record in image_records],
         axis=0
     )
 
-
-    start_time = (
-        time.perf_counter()
-    )
-
-
-    predictions = model.predict(
-        batch,
+    validator_probabilities = validator_model.predict(
+        validator_batch,
+        batch_size=32,
         verbose=0
     )
 
+    validator_classes = np.argmax(validator_probabilities, axis=1)
+    supported_probabilities = validator_probabilities[:, 0]
 
-    elapsed = (
-        time.perf_counter()
-        - start_time
-    )
+    accepted_indices = [
+        index
+        for index, predicted_class in enumerate(validator_classes)
+        if (
+            int(predicted_class) == 0
+            and float(supported_probabilities[index]) >= VALIDATOR_THRESHOLD
+        )
+    ]
 
+    # Stage 2: ResNet50 runs only on images accepted by MobileNetV2.
+    freshness_probabilities = {}
 
-    predictions = (
-        predictions
-        .reshape(-1)
-    )
+    if accepted_indices:
+        freshness_batch = np.stack(
+            [
+                preprocess_freshness_image(image_records[index]["image"])
+                for index in accepted_indices
+            ],
+            axis=0
+        )
 
+        predictions = freshness_model.predict(
+            freshness_batch,
+            batch_size=32,
+            verbose=0
+        ).reshape(-1)
 
-    inference_ms = (
-        elapsed
+        freshness_probabilities = {
+            original_index: float(probability)
+            for original_index, probability in zip(accepted_indices, predictions)
+        }
+
+    elapsed_ms_per_image = (
+        (time.perf_counter() - start_time)
         / len(image_records)
-        * 1000
+        * 1000.0
     )
-
 
     results = []
 
-
-    for index, rotten_probability in enumerate(
-        predictions
-    ):
-
-        rotten_probability = float(
-            rotten_probability
+    for index, record in enumerate(image_records):
+        predicted_validator_class = int(validator_classes[index])
+        validator_class_confidence = float(
+            validator_probabilities[index, predicted_validator_class]
         )
+        supported_probability = float(supported_probabilities[index])
 
+        quality = assess_image_quality(record["image"])
 
-        fresh_probability = (
-            1
-            - rotten_probability
-        )
+        if index in freshness_probabilities:
+            # Accepted supported produce: freshness probability from ResNet50.
+            rotten_probability = freshness_probabilities[index]
+            fresh_probability = 1.0 - rotten_probability
 
+            if rotten_probability >= FRESHNESS_THRESHOLD:
+                label = "Rotten"
+                confidence = rotten_probability
+            else:
+                label = "Fresh"
+                confidence = fresh_probability
 
-        if (
-            rotten_probability
-            >= THRESHOLD
-        ):
-
-            label = "Rotten"
-
-            confidence = (
-                rotten_probability
-            )
+            reason = None
+            status = "Accepted"
 
         else:
+            # Rejected by validator: do not invoke the freshness model.
+            label = "Rejected"
+            status = "Rejected"
 
-            label = "Fresh"
+            if predicted_validator_class == 0:
+                reason = "Uncertain Image"
+            else:
+                reason = VALIDATOR_CLASS_NAMES[predicted_validator_class]
 
-            confidence = (
-                fresh_probability
-            )
-
-
-        quality = assess_image_quality(
-            image_records[index]["image"]
-        )
-
+            confidence = validator_class_confidence
+            fresh_probability = None
+            rotten_probability = None
 
         results.append(
             {
-                "name":
-                    image_records[index]["name"],
-
-                "image":
-                    image_records[index]["image"],
-
-                "label":
-                    label,
-
-                "confidence":
-                    confidence,
-
-                "fresh_probability":
-                    fresh_probability,
-
-                "rotten_probability":
-                    rotten_probability,
-
-                "quality":
-                    quality["quality"],
-
-                "brightness":
-                    quality["brightness"],
-
-                "contrast":
-                    quality["contrast"],
-
-                "sharpness":
-                    quality["sharpness"],
-
-                "inference_ms":
-                    inference_ms,
-
-                "timestamp":
-                    datetime.now(
-                        timezone.utc
-                    ).isoformat()
+                "name": record["name"],
+                "image": record["image"],
+                "label": label,
+                "status": status,
+                "reason": reason,
+                "confidence": float(confidence),
+                "validator_label": VALIDATOR_CLASS_NAMES[predicted_validator_class],
+                "validator_confidence": validator_class_confidence,
+                "supported_probability": supported_probability,
+                "fresh_probability": fresh_probability,
+                "rotten_probability": rotten_probability,
+                "quality": quality["quality"],
+                "brightness": quality["brightness"],
+                "contrast": quality["contrast"],
+                "sharpness": quality["sharpness"],
+                "inference_ms": elapsed_ms_per_image,
+                "timestamp": datetime.now(timezone.utc).isoformat()
             }
         )
-
 
     return results
 
 
+# ROBUST GRAD-CAM — supports direct and nested ResNet50 models
 # ============================================================
-# ROBUST GRAD-CAM
-# ============================================================
 
-def find_last_conv_layer(
-    current_model
-):
+GRADCAM_LAST_CONV_LAYER = "conv5_block3_3_conv"
 
-    """
-    Find the last convolutional layer anywhere in the model.
 
-    This does NOT require ResNet50 to appear as a nested
-    tf.keras.Model.
-    """
-
+def _is_convolution_layer(layer):
+    """Return True for supported spatial convolution layers."""
     conv_types = (
         tf.keras.layers.Conv2D,
         tf.keras.layers.SeparableConv2D,
-        tf.keras.layers.DepthwiseConv2D
+        tf.keras.layers.DepthwiseConv2D,
     )
+    return isinstance(layer, conv_types)
 
 
-    # --------------------------------------------------------
-    # First search direct top-level layers
-    # --------------------------------------------------------
+def find_last_conv_layer(current_model):
+    """Find the final 4-D convolutional layer, including nested models."""
+    # Prefer the explicitly intended final ResNet50 convolution when present.
+    try:
+        candidate = current_model.get_layer(GRADCAM_LAST_CONV_LAYER)
+        if _is_convolution_layer(candidate) and len(candidate.output.shape) == 4:
+            return candidate
+    except (ValueError, AttributeError):
+        pass
 
-    for layer in reversed(
-        current_model.layers
-    ):
-
-        if isinstance(
-            layer,
-            conv_types
-        ):
-
+    # Search top-level convolution layers first.
+    for layer in reversed(getattr(current_model, "layers", [])):
+        if _is_convolution_layer(layer):
             try:
-
-                if (
-                    len(
-                        layer.output.shape
-                    )
-                    == 4
-                ):
-
+                if len(layer.output.shape) == 4:
                     return layer
+            except (AttributeError, ValueError):
+                continue
 
-            except Exception:
+    # Search nested Functional / Sequential models recursively.
+    for layer in reversed(getattr(current_model, "layers", [])):
+        if isinstance(layer, tf.keras.Model):
+            found = find_last_conv_layer(layer)
+            if found is not None:
+                return found
 
-                pass
-
-
-    # --------------------------------------------------------
-    # Search nested layers recursively
-    # --------------------------------------------------------
-
-    def recursive_search(
-        layers
-    ):
-
-        for layer in reversed(
-            layers
-        ):
-
-            if isinstance(
-                layer,
-                conv_types
-            ):
-
-                try:
-
-                    if (
-                        len(
-                            layer.output.shape
-                        )
-                        == 4
-                    ):
-
-                        return layer
-
-                except Exception:
-
-                    pass
+    return None
 
 
-            if hasattr(
-                layer,
-                "layers"
-            ):
+def _find_nested_backbone_and_conv(current_model):
+    """Find a nested model containing the final ResNet50 convolution."""
+    for layer in reversed(getattr(current_model, "layers", [])):
+        if not isinstance(layer, tf.keras.Model):
+            continue
 
-                try:
+        try:
+            conv_layer = layer.get_layer(GRADCAM_LAST_CONV_LAYER)
+            if _is_convolution_layer(conv_layer):
+                return layer, conv_layer
+        except (ValueError, AttributeError):
+            pass
 
-                    found = recursive_search(
-                        layer.layers
-                    )
+        # Fallback for a nested backbone whose final Conv2D has a different name.
+        conv_layer = find_last_conv_layer(layer)
+        if conv_layer is not None:
+            return layer, conv_layer
 
-                    if found is not None:
-
-                        return found
-
-                except Exception:
-
-                    pass
-
-
-        return None
+    return None, None
 
 
-    return recursive_search(
-        current_model.layers
+def build_gradcam_model(current_model):
+    """Build a model returning [last-conv activations, classifier output].
+
+    Two supported layouts:
+      1. A Functional model with ResNet50 layers at the top level.
+      2. A Sequential/wrapper model containing ResNet50 as a nested model,
+         followed by a pooling/classification head.
+
+    For the nested layout, the inner backbone is called again on the *outer
+    model input*. This creates a single connected graph for both outputs.
+    """
+    if not getattr(current_model, "inputs", None):
+        raise RuntimeError(
+            "The freshness model has no symbolic input. "
+            "Make sure the loaded model is built before Grad-CAM is requested."
+        )
+
+    # Layout 1: convolution is directly part of the complete model graph.
+    direct_conv = None
+    for layer in reversed(current_model.layers):
+        if _is_convolution_layer(layer):
+            direct_conv = layer
+            break
+
+    if direct_conv is not None:
+        grad_model = tf.keras.Model(
+            inputs=current_model.inputs,
+            outputs=[direct_conv.output, current_model.outputs[0]],
+            name="freshness_gradcam_model",
+        )
+        return grad_model, direct_conv.name
+
+    # Layout 2: ResNet50 is nested inside a Sequential/wrapper classifier.
+    backbone, conv_layer = _find_nested_backbone_and_conv(current_model)
+    if backbone is None or conv_layer is None:
+        raise RuntimeError(
+            "Could not locate a ResNet50 backbone containing "
+            f"'{GRADCAM_LAST_CONV_LAYER}'."
+        )
+
+    if len(current_model.inputs) != 1:
+        raise RuntimeError(
+            "The current Grad-CAM implementation expects one image input; "
+            f"the loaded model has {len(current_model.inputs)} inputs."
+        )
+
+    # This inner model exposes both the convolutional activations and the
+    # ResNet50 output from the same internal graph.
+    backbone_grad_model = tf.keras.Model(
+        inputs=backbone.inputs,
+        outputs=[conv_layer.output, backbone.outputs[0]],
+        name="resnet50_backbone_gradcam",
     )
+
+    # Rebuild the outer model path from its actual input tensor. This is the
+    # important connection missing from the previous implementation.
+    outer_x = current_model.inputs[0]
+    conv_outputs = None
+    backbone_was_called = False
+
+    for layer in current_model.layers:
+        if isinstance(layer, tf.keras.layers.InputLayer):
+            continue
+
+        if layer is backbone:
+            conv_outputs, outer_x = backbone_grad_model(
+                outer_x,
+                training=False,
+            )
+            backbone_was_called = True
+        else:
+            outer_x = layer(outer_x)
+
+    if not backbone_was_called or conv_outputs is None:
+        raise RuntimeError(
+            "The nested ResNet50 backbone was found but could not be "
+            "reconnected to the outer freshness-classifier graph."
+        )
+
+    grad_model = tf.keras.Model(
+        inputs=current_model.inputs,
+        outputs=[conv_outputs, outer_x],
+        name="freshness_gradcam_model",
+    )
+
+    return grad_model, conv_layer.name
 
 
 # ============================================================
 # GRAD-CAM OVERLAY
 # ============================================================
 
-def create_gradcam_overlay(
-    image,
-    conv_outputs,
-    gradients
-):
+def create_gradcam_overlay(image, conv_outputs, gradients):
+    """Convert convolutional activations and gradients into an image overlay."""
+    if conv_outputs.shape.rank != 4:
+        raise RuntimeError(
+            "Grad-CAM expected a 4-D convolution tensor "
+            "(batch, height, width, channels), but received "
+            f"shape {conv_outputs.shape}."
+        )
 
-    pooled_gradients = tf.reduce_mean(
-        gradients,
-        axis=(1, 2)
-    )
+    if gradients is None:
+        raise RuntimeError("Grad-CAM gradients are None.")
 
-
-    feature_maps = (
-        conv_outputs[0]
-    )
-
-    weights = (
-        pooled_gradients[0]
-    )
-
-
-    weighted_features = (
-        feature_maps
-        * weights
-    )
-
+    pooled_gradients = tf.reduce_mean(gradients, axis=(1, 2))
+    feature_maps = conv_outputs[0]
+    channel_weights = pooled_gradients[0]
 
     heatmap = tf.reduce_sum(
-        weighted_features,
-        axis=-1
+        feature_maps * channel_weights,
+        axis=-1,
     )
+    heatmap = tf.maximum(heatmap, 0)
 
+    maximum = tf.reduce_max(heatmap)
+    maximum_value = float(maximum.numpy())
 
-    heatmap = tf.maximum(
-        heatmap,
-        0
-    )
-
-
-    maximum = tf.reduce_max(
-        heatmap
-    )
-
-
-    maximum_value = float(
-        maximum.numpy()
-    )
-
-
-    if maximum_value <= 0:
-
+    if not np.isfinite(maximum_value) or maximum_value <= 0:
         raise RuntimeError(
-            "Grad-CAM produced an empty heatmap."
+            "Grad-CAM produced an empty or non-finite heatmap."
         )
 
-
-    heatmap = (
-        heatmap
-        / (
-            maximum
-            + tf.keras.backend.epsilon()
-        )
+    heatmap = heatmap / (
+        maximum + tf.keras.backend.epsilon()
     )
+    heatmap = np.asarray(heatmap.numpy(), dtype=np.float32)
 
-
-    heatmap = heatmap.numpy()
-
-
-    original = image.convert(
-        "RGB"
-    )
-
-
+    original = image.convert("RGB")
     heatmap_image = Image.fromarray(
-        np.uint8(
-            heatmap * 255
-        )
+        np.uint8(np.clip(heatmap, 0.0, 1.0) * 255)
     )
-
-
     heatmap_image = heatmap_image.resize(
         original.size,
-        Image.Resampling.BILINEAR
+        Image.Resampling.BILINEAR,
     )
-
 
     heatmap_array = (
-        np.asarray(
-            heatmap_image,
-            dtype=np.float32
-        )
-        / 255.0
+        np.asarray(heatmap_image, dtype=np.float32) / 255.0
     )
-
-
-    colored_heatmap = (
-        cm.jet(
-            heatmap_array
-        )[:, :, :3]
-        * 255
-    ).astype(
-        np.uint8
-    )
-
-
     colored_heatmap = Image.fromarray(
-        colored_heatmap
+        (cm.jet(heatmap_array)[:, :, :3] * 255).astype(np.uint8)
     )
 
-
-    overlay = Image.blend(
-        original,
-        colored_heatmap,
-        alpha=0.40
-    )
-
-
-    return overlay
+    return Image.blend(original, colored_heatmap, alpha=0.40)
 
 
 # ============================================================
 # GENERATE GRAD-CAM
 # ============================================================
 
-def generate_gradcam(
-    image,
-    predicted_label
-):
-
-    # --------------------------------------------------------
-    # Find final convolutional layer
-    # --------------------------------------------------------
-
-    last_conv_layer = find_last_conv_layer(
-        model
-    )
-
-
-    if last_conv_layer is None:
-
-        raise RuntimeError(
-            "No convolutional layer could be found "
-            "inside the loaded ResNet50 model."
-        )
-
-
-    print(
-        "Grad-CAM layer:",
-        last_conv_layer.name
-    )
-
-
-    print(
-        "Grad-CAM shape:",
-        last_conv_layer.output.shape
-    )
-
-
-    # --------------------------------------------------------
-    # Prepare input
-    # --------------------------------------------------------
-
-    input_tensor = preprocess_resnet50(
-        image
-    )
-
-
-    # --------------------------------------------------------
-    # Try the normal Keras Grad-CAM graph
-    # --------------------------------------------------------
+def generate_gradcam(image, predicted_label):
+    """Generate a Grad-CAM overlay for the selected Fresh/Rotten class."""
+    input_tensor = preprocess_resnet50(image)
 
     try:
-
-        grad_model = tf.keras.models.Model(
-            inputs=model.inputs,
-            outputs=[
-                last_conv_layer.output,
-                model.output
-            ]
-        )
-
-
+        grad_model, conv_layer_name = build_gradcam_model(model)
     except Exception as error:
-
         raise RuntimeError(
-            "The last convolutional layer was found "
-            f"({last_conv_layer.name}), but it could not "
-            "be connected to the final model output.\n\n"
-            f"Details: {error}"
-        )
+            "Could not build a connected Grad-CAM model. "
+            f"Freshness prediction is still available. Details: {error}"
+        ) from error
 
-
-    # --------------------------------------------------------
-    # Gradient calculation
-    # --------------------------------------------------------
+    print("Grad-CAM layer:", conv_layer_name)
 
     with tf.GradientTape() as tape:
-
-        conv_outputs, predictions = (
-            grad_model(
-                input_tensor,
-                training=False
-            )
+        conv_outputs, predictions = grad_model(
+            input_tensor,
+            training=False,
         )
 
-
-        rotten_probability = (
-            predictions[:, 0]
-        )
-
-
+        rotten_probability = predictions[:, 0]
         if predicted_label == "Rotten":
-
-            target_score = (
-                rotten_probability
-            )
-
+            target_score = rotten_probability
         else:
+            target_score = 1.0 - rotten_probability
 
-            target_score = (
-                1.0
-                - rotten_probability
-            )
-
-
-    # --------------------------------------------------------
-    # Calculate gradients
-    # --------------------------------------------------------
-
-    gradients = tape.gradient(
-        target_score,
-        conv_outputs
-    )
-
+    gradients = tape.gradient(target_score, conv_outputs)
 
     if gradients is None:
-
         raise RuntimeError(
-            f"Gradients were None for layer "
-            f"'{last_conv_layer.name}'."
+            f"Gradients are disconnected from '{conv_layer_name}'."
         )
-
-
-    # --------------------------------------------------------
-    # Generate visualization
-    # --------------------------------------------------------
 
     return create_gradcam_overlay(
         image,
         conv_outputs,
-        gradients
+        gradients,
     )
 
 
@@ -1556,9 +1137,10 @@ with st.sidebar:
         """
         <div class='sidebar-text'>
 
-        An AI-powered computer vision system that
-        classifies food images as <b>Fresh</b> or
-        <b>Rotten</b> using ResNet50 transfer learning.
+        A two-stage AI system. MobileNetV2 first checks
+        whether an image contains supported produce.
+        ResNet50 then classifies accepted produce as
+        <b>Fresh</b> or <b>Rotten</b>.
 
         </div>
         """,
@@ -1606,33 +1188,33 @@ with st.sidebar:
         """
         <div class='sidebar-text'>
 
-        <b>Architecture:</b>
-        ResNet50
+        <b>Stage 1:</b>
+        MobileNetV2 image validator (3 classes)
+
+        <br><br>
+
+        <b>Stage 2:</b>
+        ResNet50 freshness classifier (2 classes)
 
         <br><br>
 
         <b>Learning:</b>
-        Transfer Learning
-
-        <br><br>
-
-        <b>Pretrained Weights:</b>
-        ImageNet
-
-        <br><br>
-
-        <b>Optimizer:</b>
-        RMSprop
+        Transfer Learning with ImageNet weights
 
         <br><br>
 
         <b>Input:</b>
-        224 × 224 pixels
+        224 × 224 RGB pixels
 
         <br><br>
 
-        <b>Classes:</b>
-        Fresh / Rotten
+        <b>Validator threshold:</b>
+        0.85
+
+        <br><br>
+
+        <b>Freshness threshold:</b>
+        0.50
 
         </div>
         """,
@@ -1660,22 +1242,22 @@ with st.sidebar:
         f"""
         <div class='sidebar-text'>
 
-        <b>Test Accuracy</b>
+        <b>Food-101 External Rejection</b>
 
         <br>
 
         <span style='font-size:2rem;'>
-        {format_percentage(TEST_ACCURACY)}
+        {format_percentage(FOOD101_EXTERNAL_REJECTION_RATE)}
         </span>
 
         <br><br>
 
-        <b>Best Validation Accuracy</b>
+        <b>Unsupported False-Accept Rate</b>
 
         <br>
 
         <span style='font-size:2rem;'>
-        {format_percentage(BEST_VALIDATION_ACCURACY)}
+        {format_percentage(VALIDATOR_FALSE_ACCEPT_RATE)}
         </span>
 
         </div>
@@ -1710,20 +1292,23 @@ with st.sidebar:
 st.markdown(
     """
     <div class='main-title'>
-    🤖 AI Food Freshness Detection
+    🤖 AI Food Freshness Detection System V2.0
     </div>
 
     <div class='main-subtitle'>
-    Computer Vision Based Food Quality Classification
-    using ResNet50 Transfer Learning
+    Two-Stage Computer Vision System — Image Validation and Freshness Classification
     </div>
 
     <div class='technology-line'>
-    🧠 Deep Learning • Computer Vision • Artificial Intelligence •
-    Explainable AI
+    🧠 MobileNetV2 • ResNet50 • Transfer Learning • Explainable AI • Batch Inference
     </div>
     """,
     unsafe_allow_html=True
+)
+
+st.caption(
+    "Supported produce: apple, banana, bell pepper, carrot, cucumber, "
+    "mango, orange, potato, strawberry and tomato. Other images are rejected."
 )
 
 
@@ -1768,7 +1353,9 @@ if input_mode == "Upload Multiple Images":
         type=[
             "jpg",
             "jpeg",
-            "png"
+            "png",
+            "webp",
+            "bmp"
         ],
         accept_multiple_files=True
     )
@@ -1991,7 +1578,7 @@ if image_records:
     ):
 
         with st.spinner(
-            "Analyzing food images using ResNet50..."
+            "Validating images with MobileNetV2 and classifying accepted produce with ResNet50..."
         ):
 
             results = predict_images(
@@ -2044,104 +1631,95 @@ if image_records:
 # ============================================================
 
 if st.session_state.analysis_results:
-
     st.markdown(
         "<div class='section-divider'></div>",
         unsafe_allow_html=True
     )
-
-
     st.markdown(
-        """
-        <div class='section-title'>
-        🎯 Prediction Results
-        </div>
-        """,
+        "<div class='section-title'>🎯 V2.0 Prediction Results</div>",
         unsafe_allow_html=True
     )
 
-
-    for result in (
-        st.session_state.analysis_results
-    ):
-
+    for result in st.session_state.analysis_results:
         if result["label"] == "Fresh":
-
-            card_class = (
-                "result-card result-fresh"
-            )
-
-            icon = "🟢"
-
+            card_class, icon = "result-fresh", "🟢"
+            title = "Fresh"
+        elif result["label"] == "Rotten":
+            card_class, icon = "result-rotten", "🔴"
+            title = "Rotten"
         else:
+            card_class, icon = "result-rejected", "⛔"
+            title = "Image Rejected"
 
-            card_class = (
-                "result-card result-rotten"
-            )
-
-            icon = "🔴"
-
-
-        result_image_col, result_info_col = (
-            st.columns(
-                [1, 2]
-            )
-        )
-
+        result_image_col, result_info_col = st.columns([1, 2])
 
         with result_image_col:
-
             st.image(
                 result["image"],
                 caption=result["name"],
                 use_container_width=True
             )
 
-
         with result_info_col:
-
-            st.markdown(
-                f"""
-                <div class='{card_class}'>
-
-                <div class='result-title'>
-                {icon} {result["label"]}
+            if result["status"] == "Accepted":
+                result_details = f"""
+                <div class='result-card {card_class}'>
+                    <div class='result-title'>{icon} {title}</div>
+                    <div class='result-confidence'>
+                        Freshness confidence: {result['confidence'] * 100:.2f}%
+                    </div>
+                    <div class='result-line'>Image validation: Accepted</div>
+                    <div class='result-line'>
+                        Supported-produce probability: {result['supported_probability'] * 100:.2f}%
+                    </div>
+                    <div class='result-line'>
+                        Fresh probability: {result['fresh_probability'] * 100:.2f}%
+                    </div>
+                    <div class='result-line'>
+                        Rotten probability: {result['rotten_probability'] * 100:.2f}%
+                    </div>
+                    <div class='result-line'>Image quality: {result['quality']}</div>
+                    <div class='result-line'>
+                        Approx. inference: {result['inference_ms']:.2f} ms/image
+                    </div>
                 </div>
-
-                <div class='result-confidence'>
-                Confidence:
-                {result["confidence"] * 100:.2f}%
+                """
+            else:
+                result_details = f"""
+                <div class='result-card result-rejected'>
+                    <div class='result-title'>{icon} {title}</div>
+                    <div class='result-confidence'>Reason: {result['reason']}</div>
+                    <div class='result-line'>
+                        Validator prediction: {result['validator_label']}
+                    </div>
+                    <div class='result-line'>
+                        Validator confidence: {result['validator_confidence'] * 100:.2f}%
+                    </div>
+                    <div class='result-line'>
+                        Supported-produce probability: {result['supported_probability'] * 100:.2f}%
+                    </div>
+                    <div class='result-line'>Image quality: {result['quality']}</div>
+                    <div class='result-line'>
+                        ResNet50 was not run on this image.
+                    </div>
+                    <div class='result-line'>
+                        Approx. inference: {result['inference_ms']:.2f} ms/image
+                    </div>
                 </div>
+                """
 
-                <br>
+            st.markdown(result_details, unsafe_allow_html=True)
 
-                <div class='result-line'>
-                Fresh probability:
-                {result["fresh_probability"] * 100:.2f}%
-                </div>
-
-                <div class='result-line'>
-                Rotten probability:
-                {result["rotten_probability"] * 100:.2f}%
-                </div>
-
-                <div class='result-line'>
-                Image quality:
-                {result["quality"]}
-                </div>
-
-                <div class='result-line'>
-                Approx. inference:
-                {result["inference_ms"]:.3f} ms/image
-                </div>
-
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
+    accepted_count = sum(
+        result["status"] == "Accepted"
+        for result in st.session_state.analysis_results
+    )
+    rejected_count = len(st.session_state.analysis_results) - accepted_count
+    accepted_col, rejected_col = st.columns(2)
+    accepted_col.metric("Accepted produce images", accepted_count)
+    rejected_col.metric("Rejected images", rejected_count)
 
 
-# ============================================================
 # DETECTION HISTORY & ANALYTICS
 # ============================================================
 
@@ -2233,11 +1811,19 @@ if not history_df.empty:
             ).sum()
         )
 
+        rejected_count = int(
+            (
+                history_df["prediction"]
+                == "Rejected"
+            ).sum()
+        )
+
     else:
 
         fresh_count = 0
 
         rotten_count = 0
+        rejected_count = 0
 
 
     if "confidence" in history_df.columns:
@@ -2254,41 +1840,29 @@ if not history_df.empty:
         average_confidence = 0
 
 
-    analytics_col1, analytics_col2, analytics_col3, analytics_col4 = (
-        st.columns(4)
+    analytics_col1, analytics_col2, analytics_col3, analytics_col4, analytics_col5 = (
+        st.columns(5)
     )
 
-
     with analytics_col1:
-
-        st.metric(
-            "Total Detections",
-            total_predictions
-        )
-
+        st.metric("Total Detections", total_predictions)
 
     with analytics_col2:
-
-        st.metric(
-            "Fresh",
-            fresh_count
-        )
-
+        st.metric("Fresh", fresh_count)
 
     with analytics_col3:
-
-        st.metric(
-            "Rotten",
-            rotten_count
-        )
-
+        st.metric("Rotten", rotten_count)
 
     with analytics_col4:
+        st.metric("Rejected", rejected_count)
 
-        st.metric(
-            "Average Confidence",
-            f"{average_confidence:.2f}%"
-        )
+    with analytics_col5:
+        st.metric("Average Confidence", f"{average_confidence:.2f}%")
+
+    st.caption(
+        "Average confidence combines the freshness confidence for accepted "
+        "produce and the validator confidence for rejected images."
+    )
 
 
     # ========================================================
@@ -2411,217 +1985,70 @@ if not history_df.empty:
 
 
 # ============================================================
-# MODEL PERFORMANCE
+# MODEL PERFORMANCE — IMPROVED V2.0 VALIDATOR TEST RESULTS
 # ============================================================
 
 st.markdown(
     "<div class='section-divider'></div>",
     unsafe_allow_html=True
 )
-
-
 st.markdown(
-    """
-    <div class='section-title'>
-    📈 Model Performance
-    </div>
-    """,
+    "<div class='section-title'>📈 Model Performance — Improved V2.0 Validator</div>",
     unsafe_allow_html=True
 )
 
+performance_columns = st.columns(4)
+performance_metrics = [
+    ("Validator 3-Class Accuracy", format_percentage(VALIDATOR_3CLASS_ACCURACY)),
+    ("Produce Recall", format_percentage(VALIDATOR_PRODUCE_RECALL)),
+    ("Accepted Precision", format_percentage(VALIDATOR_ACCEPTED_PRECISION)),
+    ("Unsupported False-Accept Rate", format_percentage(VALIDATOR_FALSE_ACCEPT_RATE)),
+]
 
-performance_col1, performance_col2, performance_col3, performance_col4 = (
-    st.columns(4)
-)
-
-
-with performance_col1:
-
-    st.markdown(
-        f"""
-        <div class='metric-card'>
-
-        <div class='metric-label'>
-        Test Accuracy
-        </div>
-
-        <div class='metric-value'>
-        {format_percentage(TEST_ACCURACY)}
-        </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-with performance_col2:
-
-    st.markdown(
-        f"""
-        <div class='metric-card'>
-
-        <div class='metric-label'>
-        Best Validation Accuracy
-        </div>
-
-        <div class='metric-value'>
-        {format_percentage(BEST_VALIDATION_ACCURACY)}
-        </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-with performance_col3:
-
-    st.markdown(
-        f"""
-        <div class='metric-card'>
-
-        <div class='metric-label'>
-        Test Images
-        </div>
-
-        <div class='metric-value'>
-        {TEST_IMAGES:,}
-        </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-with performance_col4:
-
-    st.markdown(
-        """
-        <div class='metric-card'>
-
-        <div class='metric-label'>
-        Classes
-        </div>
-
-        <div class='metric-value'>
-        2
-        </div>
-
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
-
-
-# ============================================================
-# CLASSIFICATION RESULTS
-# ============================================================
+for column, (label, value) in zip(performance_columns, performance_metrics):
+    with column:
+        st.markdown(
+            f"""
+            <div class='metric-card'>
+                <div class='metric-label'>{label}</div>
+                <div class='metric-value'>{value}</div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
 st.markdown(
-    """
-    <div class='subsection-title'>
-    🎯 Classification Results
-    </div>
-    """,
+    "<div class='subsection-title'>🎯 Validator Three-Class Confusion Matrix</div>",
     unsafe_allow_html=True
 )
-
-
-fresh_correct = int(
-    RESNET_CONFUSION_MATRIX[0, 0]
-)
-
-fresh_to_rotten = int(
-    RESNET_CONFUSION_MATRIX[0, 1]
-)
-
-rotten_correct = int(
-    RESNET_CONFUSION_MATRIX[1, 1]
-)
-
-rotten_to_fresh = int(
-    RESNET_CONFUSION_MATRIX[1, 0]
-)
-
-
-classification_col1, classification_col2, classification_col3, classification_col4 = (
-    st.columns(4)
-)
-
-
-with classification_col1:
-
-    st.metric(
-        "Fresh Correct",
-        fresh_correct
-    )
-
-
-with classification_col2:
-
-    st.metric(
-        "Fresh → Rotten",
-        fresh_to_rotten
-    )
-
-
-with classification_col3:
-
-    st.metric(
-        "Rotten Correct",
-        rotten_correct
-    )
-
-
-with classification_col4:
-
-    st.metric(
-        "Rotten → Fresh",
-        rotten_to_fresh
-    )
-
-
 st.caption(
-    "These values correspond to the ResNet50 test confusion matrix."
+    "Original held-out validator test set: 5,373 images. "
+    "The displayed operating metrics were evaluated at threshold 0.80; "
+    "the deployed application now uses a stricter 0.85 acceptance threshold. "
+    "The confusion matrix shows three-class argmax predictions."
+)
+validator_cm_df = pd.DataFrame(
+    VALIDATOR_CONFUSION_MATRIX,
+    index=["Actual Supported Produce", "Actual Other Food", "Actual Non-Food"],
+    columns=["Predicted Supported Produce", "Predicted Other Food", "Predicted Non-Food"]
+)
+st.dataframe(validator_cm_df, use_container_width=True)
+
+external_cols = st.columns(2)
+external_cols[0].metric(
+    "Food-101 External Rejection",
+    format_percentage(FOOD101_EXTERNAL_REJECTION_RATE)
+)
+external_cols[1].metric(
+    "Food-101 External Test Images",
+    f"{FOOD101_EXTERNAL_TEST_IMAGES:,}"
+)
+st.caption(
+    "Food-101 official external test: 2,499 of 2,500 prepared-food images "
+    "were rejected; one donut image was incorrectly accepted."
 )
 
 
-# ============================================================
-# PRECISION / RECALL / F1
-# ============================================================
-
-metric_col1, metric_col2, metric_col3 = (
-    st.columns(3)
-)
-
-
-with metric_col1:
-
-    st.metric(
-        "Precision",
-        format_percentage(PRECISION)
-    )
-
-
-with metric_col2:
-
-    st.metric(
-        "Recall",
-        format_percentage(RECALL)
-    )
-
-
-with metric_col3:
-
-    st.metric(
-        "F1-Score",
-        format_percentage(F1_SCORE)
-    )
-
-
-# ============================================================
 # TECHNICAL SPECIFICATIONS
 # ============================================================
 
@@ -2629,152 +2056,65 @@ st.markdown(
     "<div class='section-divider'></div>",
     unsafe_allow_html=True
 )
-
-
 st.markdown(
-    """
-    <div class='section-title'>
-    ⚙️ Technical Specifications
-    </div>
-    """,
+    "<div class='section-title'>⚙️ Technical Specifications</div>",
     unsafe_allow_html=True
 )
 
-
-technical_col1, technical_col2 = (
-    st.columns(2)
-)
-
+technical_col1, technical_col2 = st.columns(2)
 
 with technical_col1:
-
     st.markdown(
         """
         <div class='metric-card'>
-
-        <h3>🧠 Deep Learning</h3>
-
-        <p>
-        <b>Architecture:</b>
-        ResNet50
-        </p>
-
-        <p>
-        <b>Learning Strategy:</b>
-        Transfer Learning
-        </p>
-
-        <p>
-        <b>Pretrained Weights:</b>
-        ImageNet
-        </p>
-
-        <p>
-        <b>Optimizer:</b>
-        RMSprop
-        </p>
-
-        <p>
-        <b>Input Resolution:</b>
-        224 × 224 pixels
-        </p>
-
-        <p>
-        <b>Output:</b>
-        Binary Classification
-        </p>
-
-        <p>
-        <b>Classes:</b>
-        Fresh / Rotten
-        </p>
-
-        <p>
-        <b>Classification Head:</b>
-        GlobalAveragePooling2D →
-        Dense(128, ReLU) →
-        Dropout(0.3) →
-        Dense(1, Sigmoid)
-        </p>
-
+            <h3>🧠 Stage 1 — Image Validator</h3>
+            <p><b>Architecture:</b> MobileNetV2</p>
+            <p><b>Preprocessing:</b> MobileNetV2 preprocess_input</p>
+            <p><b>Input:</b> 224 × 224 RGB pixels</p>
+            <p><b>Output:</b> 3-class Softmax</p>
+            <p><b>Classes:</b> Supported Produce / Other Food / Non-Food</p>
+            <p><b>Acceptance rule:</b> Supported Produce class and probability ≥ 0.85</p>
+            <p><b>Training optimizer:</b> Adam (learning rate 0.001)</p>
         </div>
         """,
         unsafe_allow_html=True
     )
 
-
 with technical_col2:
-
-    model_size_text = (
-        f"{MODEL_SIZE_MB:.2f} MB"
-        if MODEL_SIZE_MB is not None
-        else "—"
+    total_size_text = (
+        f"{MODEL_SIZE_MB:.2f} MB" if MODEL_SIZE_MB is not None else "—"
     )
-
-
+    validator_size_text = (
+        f"{VALIDATOR_MODEL_SIZE_MB:.2f} MB"
+        if VALIDATOR_MODEL_SIZE_MB is not None else "—"
+    )
+    freshness_size_text = (
+        f"{FRESHNESS_MODEL_SIZE_MB:.2f} MB"
+        if FRESHNESS_MODEL_SIZE_MB is not None else "—"
+    )
     st.markdown(
         f"""
         <div class='metric-card'>
-
-        <h3>📊 Evaluation</h3>
-
-        <p>
-        <b>Training Images:</b>
-        {TRAINING_IMAGES:,}
-        </p>
-
-        <p>
-        <b>Validation Images:</b>
-        {VALIDATION_IMAGES:,}
-        </p>
-
-        <p>
-        <b>Testing Images:</b>
-        {TEST_IMAGES:,}
-        </p>
-
-        <p>
-        <b>Test Accuracy:</b>
-        {format_percentage(TEST_ACCURACY)}
-        </p>
-
-        <p>
-        <b>Best Validation Accuracy:</b>
-        {format_percentage(BEST_VALIDATION_ACCURACY)}
-        </p>
-
-        <p>
-        <b>Precision:</b>
-        {format_percentage(PRECISION)}
-        </p>
-
-        <p>
-        <b>Recall:</b>
-        {format_percentage(RECALL)}
-        </p>
-
-        <p>
-        <b>F1-Score:</b>
-        {format_percentage(F1_SCORE)}
-        </p>
-
-        <p>
-        <b>Model Size:</b>
-        {model_size_text}
-        </p>
-
-        <p>
-        <b>Loss Function:</b>
-        Binary Cross-Entropy
-        </p>
-
+            <h3>🍎 Stage 2 — Freshness Classifier</h3>
+            <p><b>Architecture:</b> ResNet50</p>
+            <p><b>Preprocessing:</b> ResNet50 preprocess_input</p>
+            <p><b>Input:</b> 224 × 224 RGB pixels</p>
+            <p><b>Output:</b> 1 sigmoid probability</p>
+            <p><b>Classes:</b> Fresh / Rotten</p>
+            <p><b>Decision rule:</b> Rotten probability ≥ 0.50 means Rotten</p>
+            <p><b>Training optimizer:</b> Adam (learning rate 0.00003)</p>
+            <p><b>Fine-tuning:</b> Last 50 backbone layers; dropout 0.20</p>
+            <p><b>Validator test set:</b> {VALIDATOR_TEST_IMAGES:,} images</p>
+            <p><b>Freshness test set:</b> {FRESHNESS_TEST_IMAGES:,} images</p>
+            <p><b>Validator model size:</b> {validator_size_text}</p>
+            <p><b>Freshness model size:</b> {freshness_size_text}</p>
+            <p><b>Total model size:</b> {total_size_text}</p>
         </div>
         """,
         unsafe_allow_html=True
     )
 
 
-# ============================================================
 # AI PROCESSING PIPELINE
 # ============================================================
 
@@ -2782,95 +2122,36 @@ st.markdown(
     "<div class='section-divider'></div>",
     unsafe_allow_html=True
 )
-
-
 st.markdown(
-    """
-    <div class='section-title'>
-    🔄 AI Processing Pipeline
-    </div>
-    """,
+    "<div class='section-title'>🔄 V2.0 AI Processing Pipeline</div>",
     unsafe_allow_html=True
 )
 
-
 pipeline_items = [
-
-    (
-        "📷",
-        "Input",
-        "Upload or capture multiple images"
-    ),
-
-    (
-        "🔍",
-        "Quality",
-        "Image quality assessment"
-    ),
-
-    (
-        "⚙️",
-        "Preprocess",
-        "224 × 224 + ResNet50 preprocessing"
-    ),
-
-    (
-        "🧠",
-        "ResNet50",
-        "Transfer-learning inference"
-    ),
-
-    (
-        "🎯",
-        "Prediction",
-        "Fresh / Rotten"
-    ),
-
-    (
-        "🔥",
-        "Grad-CAM",
-        "Explain selected image"
-    )
+    ("📷", "Input", "Upload or capture food images"),
+    ("📐", "Preprocess", "Resize to 224 × 224 RGB"),
+    ("🔍", "Validate", "MobileNetV2 checks 3 image classes"),
+    ("✅", "Accept / Reject", "Accept supported produce at threshold 0.85"),
+    ("🧠", "Freshness", "ResNet50 predicts Fresh or Rotten"),
+    ("📊", "Results", "Confidence, history and Grad-CAM"),
 ]
 
-
-pipeline_columns = st.columns(
-    6
-)
-
-
-for column, item in zip(
-    pipeline_columns,
-    pipeline_items
-):
-
+pipeline_columns = st.columns(6)
+for column, item in zip(pipeline_columns, pipeline_items):
     icon, title, description = item
-
     with column:
-
         st.markdown(
             f"""
             <div class='pipeline-card'>
-
-            <div class='pipeline-icon'>
-            {icon}
-            </div>
-
-            <div class='pipeline-title'>
-            {title}
-            </div>
-
-            <div class='pipeline-description'>
-            {description}
-            </div>
-
+                <div class='pipeline-icon'>{icon}</div>
+                <div class='pipeline-title'>{title}</div>
+                <div class='pipeline-description'>{description}</div>
             </div>
             """,
             unsafe_allow_html=True
         )
 
 
-# ============================================================
 # GRAD-CAM
 # ============================================================
 
@@ -2895,27 +2176,32 @@ else:
 
     gradcam_options = [
         result["name"]
-        for result
-        in st.session_state.analysis_results
+        for result in st.session_state.analysis_results
+        if result["label"] in ("Fresh", "Rotten")
     ]
 
 
-    selected_gradcam = st.selectbox(
-        "Select an image to explain",
-        gradcam_options
-    )
+    if not gradcam_options:
+        st.info(
+            "Grad-CAM is available only for images accepted by the validator. "
+            "The current batch contains no accepted produce images."
+        )
+        selected_gradcam = None
+    else:
+        selected_gradcam = st.selectbox(
+            "Select an accepted produce image to explain",
+            gradcam_options
+        )
 
 
     selected_result = next(
         (
             result
-            for result
-            in st.session_state.analysis_results
-            if result["name"]
-            == selected_gradcam
+            for result in st.session_state.analysis_results
+            if result["name"] == selected_gradcam
         ),
         None
-    )
+    ) if selected_gradcam is not None else None
 
 
     if selected_result is not None:
@@ -3052,15 +2338,17 @@ with objective_tab:
 
         <h3>Project Objective</h3>
 
-        The objective of this project is to develop an
-        AI-powered computer vision system that classifies
-        food images as <b>Fresh</b> or <b>Rotten</b>.
+        The objective of Food Freshness Detection System V2.0
+        is to validate food images before performing freshness
+        classification.
 
         <br><br>
 
-        The system uses <b>ResNet50</b> transfer learning
-        to extract visual features and perform binary
-        classification.
+        <b>MobileNetV2</b> first classifies an image as
+        Supported Produce, Other Food, or Non-Food.
+        Only supported-produce images that meet the 0.85
+        acceptance threshold proceed to <b>ResNet50</b>,
+        which predicts Fresh or Rotten.
 
         <br><br>
 
@@ -3114,8 +2402,13 @@ with technology_tab:
 
         <br><br>
 
-        <b>Model:</b>
-        ResNet50
+        <b>Image Validator:</b>
+        MobileNetV2 (3-class Softmax)
+
+        <br><br>
+
+        <b>Freshness Classifier:</b>
+        ResNet50 (binary Sigmoid)
 
         <br><br>
 
@@ -3129,8 +2422,8 @@ with technology_tab:
 
         <br><br>
 
-        <b>Optimizer:</b>
-        RMSprop
+        <b>Training Optimizer:</b>
+        Adam for the selected V2 models
 
         <br><br>
 
@@ -3172,16 +2465,16 @@ with methodology_tab:
 
         <b>1. Dataset Preparation</b><br>
 
-        Food images are organized into Fresh and Rotten
-        classes and divided into training, validation
-        and testing subsets.
+        Supported produce images are combined with external
+        Other Food and Non-Food examples for the validator.
+        The freshness dataset retains Fresh and Rotten labels.
 
         <br><br>
 
         <b>2. Image Preprocessing</b><br>
 
-        Images are resized to 224 × 224 pixels and
-        ResNet50-specific ImageNet preprocessing is applied.
+        Images are resized to 224 × 224 pixels. Each model
+        receives its own architecture-specific preprocessing.
 
         <br><br>
 
@@ -3194,8 +2487,9 @@ with methodology_tab:
 
         <b>4. Transfer Learning</b><br>
 
-        ResNet50 pretrained on ImageNet is used as the
-        visual feature extractor.
+        MobileNetV2 validates the image category. ResNet50,
+        pretrained on ImageNet, classifies freshness for
+        accepted produce images.
 
         <br><br>
 
@@ -3208,9 +2502,9 @@ with methodology_tab:
 
         <b>6. Final Training</b><br>
 
-        ResNet50 is trained using the selected RMSprop
-        optimizer with early stopping and adaptive
-        learning-rate reduction.
+        The MobileNetV2 validator and ResNet50 freshness
+        classifier are trained as separate models with
+        their selected configurations.
 
         <br><br>
 
@@ -3237,8 +2531,9 @@ with methodology_tab:
 
         <b>10. Deployment</b><br>
 
-        The trained ResNet50 model is integrated into
-        a Streamlit dashboard for visual inference.
+        Both trained models are integrated into Streamlit.
+        Unsupported or uncertain images are rejected before
+        the freshness classifier is called.
 
         </div>
         """,
@@ -3329,9 +2624,9 @@ st.markdown(
     """
     <div class='footer'>
 
-    AI Food Freshness Detection System |
-    ResNet50 • Transfer Learning • Computer Vision •
-    Batch Inference • Explainable AI • Cloud History
+    AI Food Freshness Detection System V2.0 |
+    MobileNetV2 • ResNet50 • Transfer Learning •
+    Image Validation • Batch Inference • Explainable AI • Cloud History
 
     <br>
 
